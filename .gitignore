@@ -1,0 +1,11 @@
+node_modules/
+dist/
+test-output/
+test-multi/
+test-portfolio/
+test-exe/
+*.png
+*.jpg
+*.log
+.DS_Store
+Thumbs.db

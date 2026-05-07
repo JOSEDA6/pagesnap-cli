@@ -1,0 +1,43 @@
+{
+  "name": "pagesnap-cli",
+  "version": "1.0.0",
+  "description": "Full-page web screenshots for AI conversations. Capture entire pages from the command line.",
+  "main": "src/index.js",
+  "bin": {
+    "pagesnap": "src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "build:exe": "pkg . --targets node18-win-x64 --output dist/pagesnap.exe",
+    "test": "node src/cli.js https://example.com -o test-output"
+  },
+  "pkg": {
+    "scripts": "src/**/*.js",
+    "assets": [],
+    "targets": ["node18-win-x64"],
+    "outputPath": "dist"
+  },
+  "keywords": [
+    "screenshot",
+    "full-page",
+    "capture",
+    "puppeteer",
+    "cli",
+    "ai",
+    "long-screenshot"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^12.1.0",
+    "ora": "^5.4.1",
+    "puppeteer": "^23.0.0"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
