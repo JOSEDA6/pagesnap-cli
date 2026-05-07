@@ -13,6 +13,10 @@ const DEFAULT_OPTIONS = {
 async function capture(url, options = {}) {
   const opts = { ...DEFAULT_OPTIONS, ...options };
 
+  // Clamp viewport to valid ranges
+  opts.width = Math.max(320, Math.min(3840, opts.width));
+  opts.height = Math.max(200, Math.min(2160, opts.height));
+
   const browser = await puppeteer.launch({
     headless: 'new',
     args: [

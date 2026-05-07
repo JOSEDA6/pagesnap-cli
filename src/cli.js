@@ -22,9 +22,9 @@ program
   .option('-n, --name <filename>', 'Output filename (without extension)')
   .option('-l, --links', 'Detect nav links and capture each linked page')
   .option('-c, --copy', 'Copy screenshot to clipboard')
-  .option('-w, --width <pixels>', 'Viewport width', parseInt, 1280)
+  .option('--width <pixels>', 'Viewport width', parseInt, 1280)
   .option('--height <pixels>', 'Viewport height', parseInt, 800)
-  .option('-d, --delay <ms>', 'Scroll delay in ms', parseInt, 300)
+  .option('--delay <ms>', 'Scroll delay in ms', parseInt, 300)
   .option('-f, --format <type>', 'Image format: png or jpeg', 'png')
   .option('--no-sticky', 'Keep sticky/fixed elements visible')
   .action(async (url, options) => {
@@ -37,11 +37,17 @@ program
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
+    // Clamp and validate viewport dimensions
+    const width = parseInt(options.width) || 1280;
+    const height = parseInt(options.height) || 800;
+    const clampedWidth = Math.max(320, Math.min(3840, width));
+    const clampedHeight = Math.max(200, Math.min(2160, height));
+
     const captureOpts = {
-      width: options.width,
-      height: options.height || 800,
-      delay: options.delay,
-      format: options.format,
+      width: clampedWidth,
+      height: clampedHeight,
+      delay: parseInt(options.delay) || 300,
+      format: options.format || 'png',
       hideStickyElements: options.sticky !== false,
     };
 
@@ -59,7 +65,7 @@ async function handleSingleCapture(url, outputDir, options, captureOpts) {
     const result = await capture(url, captureOpts);
 
     const filename = options.name
-      ? `${options.name}.${captureOpts.format}`
+      ? `${sanitizeFilename(options.name)}.${captureOpts.format}`
       : generateFilename(url, captureOpts.format);
     const outputPath = path.join(outputDir, filename);
 
@@ -145,6 +151,10 @@ function generateFilename(url, format, index) {
   const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
   const suffix = index !== undefined ? `-${index}` : '';
   return `pagesnap-${domain}${suffix}-${timestamp}.${format}`;
+}
+
+function sanitizeFilename(name) {
+  return name.replace(/[<>:"|?*]/g, '_').replace(/\s+/g, '-');
 }
 
 function printImageInfo(buffer, filepath) {
