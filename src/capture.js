@@ -4,20 +4,60 @@ const DEFAULT_OPTIONS = {
   width: 1280,
   height: 800,
   delay: 300,
-  lazyLoadWait: 500,
   format: 'png',
-  quality: undefined,
+  quality: 90,
+  timeout: 30000,
+  retries: 2,
   hideStickyElements: true,
 };
 
-async function capture(url, options = {}) {
-  const opts = { ...DEFAULT_OPTIONS, ...options };
+const MOBILE_USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
-  // Clamp viewport to valid ranges
+const TRANSIENT_ERRORS = [
+  'ERR_CONNECTION_',
+  'ERR_TIMEOUT',
+  'net::ERR_',
+  'Navigation timeout',
+  'Protocol error',
+  'Session closed',
+  'Target closed',
+  'Page crashed'
+];
+
+function isTransientError(err) {
+  const msg = err.message || String(err);
+  return TRANSIENT_ERRORS.some(pattern => msg.includes(pattern));
+}
+
+async function retryWithBackoff(fn, retries = 2, delay = 1000) {
+  let lastErr;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientError(err) || i === retries) {
+        throw err;
+      }
+      const waitTime = delay * Math.pow(2, i);
+      console.log(`  Retry ${i + 1}/${retries} after ${waitTime}ms...`);
+      await new Promise(r => setTimeout(r, waitTime));
+    }
+  }
+  throw lastErr;
+}
+
+function clampOpts(options) {
+  const opts = { ...DEFAULT_OPTIONS, ...options };
   opts.width = Math.max(320, Math.min(3840, opts.width));
   opts.height = Math.max(200, Math.min(2160, opts.height));
+  opts.quality = Math.max(1, Math.min(100, opts.quality || 90));
+  opts.timeout = Math.max(5000, Math.min(120000, opts.timeout || 30000));
+  return opts;
+}
 
-  const browser = await puppeteer.launch({
+async function launchBrowser(opts) {
+  return puppeteer.launch({
     headless: 'new',
     args: [
       '--no-sandbox',
@@ -26,53 +66,68 @@ async function capture(url, options = {}) {
       `--window-size=${opts.width},${opts.height}`,
     ],
   });
+}
 
-  try {
-    const page = await browser.newPage();
-    await page.setViewport({ width: opts.width, height: opts.height });
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+async function capture(url, options = {}) {
+  const opts = clampOpts(options);
 
-    await autoScroll(page, opts);
+  return retryWithBackoff(async () => {
+    const browser = await launchBrowser(opts);
 
-    if (opts.hideStickyElements) {
-      await hideStickyElements(page);
+    try {
+      const page = await browser.newPage();
+
+      // Set user agent
+      if (opts.userAgent) {
+        await page.setUserAgent(opts.userAgent);
+      } else if (opts.mobile) {
+        await page.setUserAgent(MOBILE_USER_AGENT);
+      }
+
+      await page.setViewport({ width: opts.width, height: opts.height });
+      await page.goto(url, { waitUntil: 'networkidle2', timeout: opts.timeout });
+
+      await autoScroll(page, opts);
+
+      if (opts.hideStickyElements) {
+        await hideStickyElements(page);
+      }
+
+      const buffer = await page.screenshot({
+        fullPage: true,
+        type: opts.format,
+        quality: opts.format === 'jpeg' ? opts.quality : undefined,
+      });
+
+      if (opts.hideStickyElements) {
+        await restoreStickyElements(page);
+      }
+
+      const title = await page.title();
+
+      return { buffer, title, url };
+    } finally {
+      await browser.close();
     }
-
-    const buffer = await page.screenshot({
-      fullPage: true,
-      type: opts.format,
-      quality: opts.format === 'jpeg' ? (opts.quality || 90) : undefined,
-    });
-
-    if (opts.hideStickyElements) {
-      await restoreStickyElements(page);
-    }
-
-    const title = await page.title();
-
-    return { buffer, title, url };
-  } finally {
-    await browser.close();
-  }
+  }, opts.retries);
 }
 
 async function captureLinks(url, options = {}) {
-  const opts = { ...DEFAULT_OPTIONS, ...options };
-
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      `--window-size=${opts.width},${opts.height}`,
-    ],
-  });
+  const opts = clampOpts(options);
+  const browser = await launchBrowser(opts);
 
   try {
     const page = await browser.newPage();
+
+    // Set user agent
+    if (opts.userAgent) {
+      await page.setUserAgent(opts.userAgent);
+    } else if (opts.mobile) {
+      await page.setUserAgent(MOBILE_USER_AGENT);
+    }
+
     await page.setViewport({ width: opts.width, height: opts.height });
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: opts.timeout });
 
     const links = await detectNavLinks(page);
 
@@ -103,7 +158,7 @@ async function captureLinks(url, options = {}) {
       }
 
       try {
-        await page.goto(link.href, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(link.href, { waitUntil: 'networkidle2', timeout: opts.timeout });
         const buffer = await singleCapture(page, opts);
         const title = await page.title();
         results.push({ buffer, title, url: link.href, linkText: link.text });
@@ -128,7 +183,7 @@ async function singleCapture(page, opts) {
   const buffer = await page.screenshot({
     fullPage: true,
     type: opts.format,
-    quality: opts.format === 'jpeg' ? (opts.quality || 90) : undefined,
+    quality: opts.format === 'jpeg' ? opts.quality : undefined,
   });
 
   if (opts.hideStickyElements) {
@@ -139,7 +194,7 @@ async function singleCapture(page, opts) {
 }
 
 async function autoScroll(page, opts) {
-  await page.evaluate(async (delay, lazyWait) => {
+  await page.evaluate(async (scrollDelay) => {
     await new Promise((resolve) => {
       let totalHeight = 0;
       const viewportHeight = window.innerHeight;
@@ -155,17 +210,23 @@ async function autoScroll(page, opts) {
         if (totalHeight >= maxHeight) {
           clearInterval(timer);
           window.scrollTo(0, 0);
-          setTimeout(resolve, delay);
+          setTimeout(resolve, scrollDelay);
         }
-      }, delay);
+      }, scrollDelay);
     });
-  }, opts.delay, opts.lazyLoadWait);
+  }, opts.delay);
 }
 
 async function hideStickyElements(page) {
   await page.evaluate(() => {
     const hidden = [];
-    document.querySelectorAll('*').forEach((el) => {
+    const candidates = document.querySelectorAll(
+      '[style*="position"], header, nav, footer, [class*="sticky"], [class*="fixed"], [class*="toolbar"], [class*="header"], [class*="nav"]'
+    );
+    const checked = new Set();
+    for (const el of candidates) {
+      if (checked.has(el)) continue;
+      checked.add(el);
       const style = window.getComputedStyle(el);
       if (
         (style.position === 'fixed' || style.position === 'sticky') &&
@@ -175,7 +236,21 @@ async function hideStickyElements(page) {
         hidden.push({ el, orig: el.style.visibility });
         el.style.visibility = 'hidden';
       }
-    });
+    }
+    if (hidden.length === 0) {
+      document.querySelectorAll('*').forEach((el) => {
+        if (checked.has(el)) return;
+        const style = window.getComputedStyle(el);
+        if (
+          (style.position === 'fixed' || style.position === 'sticky') &&
+          el.getBoundingClientRect().height > 0 &&
+          el.getBoundingClientRect().width > 100
+        ) {
+          hidden.push({ el, orig: el.style.visibility });
+          el.style.visibility = 'hidden';
+        }
+      });
+    }
     window.__pagesnap_hidden = hidden;
   });
 }
